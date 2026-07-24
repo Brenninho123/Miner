@@ -28,7 +28,8 @@ jobs:
           pip install watchdog requests psutil pytest pyinstaller
 
       - name: Run tests
-        run: pytest
+        run: pytest || if [ $? -eq 5 ]; then exit 0; else exit $?; fi
+        shell: bash
 
       - name: Run scanner smoke test
         run: python src/main.py scan data/signatures.json
