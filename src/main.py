@@ -1,105 +1,68 @@
 import os
 import sys
-import json
-import hashlib
-import argparse
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.filechooser import FileChooserIconView
+from kivy.uix.popup import Popup
+
+from main import load_signatures, scan_directory
 from project import PROJECT
 
-def load_signatures():
-    path = PROJECT["signatures_file"]
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r") as f:
-        return json.load(f)
+class MinerRoot(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(orientation="vertical", padding=10, spacing=10, **kwargs)
 
-def save_signatures(signatures):
-    path = PROJECT["signatures_file"]
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(signatures, f, indent=4)
+        self.status_label = Label(text="Ready", size_hint=(1, 0.1))
+        self.add_widget(self.status_label)
 
-def hash_file(path, algo="sha256"):
-    hasher = hashlib.new(algo)
-    try:
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-        return hasher.hexdigest()
-    except (PermissionError, FileNotFoundError, OSError):
-        return None
+        self.results_label = Label(text="", size_hint_y=None)
+        self.results_label.bind(texture_size=self.results_label.setter("size"))
 
-def scan_file(path, signatures):
-    file_hash = hash_file(path)
-    if file_hash is None:
-        return None
-    if file_hash in signatures:
-        return {
-            "path": path,
-            "hash": file_hash,
-            "threat": signatures[file_hash]
-        }
-    return None
+        scroll = ScrollView(size_hint=(1, 0.7))
+        scroll.add_widget(self.results_label)
+        self.add_widget(scroll)
 
-def scan_directory(root, signatures):
-    results = []
-    for dirpath, _, filenames in os.walk(root):
-        for filename in filenames:
-            full_path = os.path.join(dirpath, filename)
-            result = scan_file(full_path, signatures)
-            if result:
-                results.append(result)
-    return results
+        scan_button = Button(text="Choose folder and scan", size_hint=(1, 0.2))
+        scan_button.bind(on_press=self.open_file_chooser)
+        self.add_widget(scan_button)
 
-def add_signature(path, threat_name, signatures):
-    file_hash = hash_file(path)
-    if file_hash is None:
-        print(f"Could not hash file: {path}")
-        return
-    signatures[file_hash] = threat_name
-    save_signatures(signatures)
-    print(f"Added signature for {threat_name}: {file_hash}")
+    def open_file_chooser(self, instance):
+        chooser = FileChooserIconView(path=os.path.expanduser("~"), dirselect=True)
+        popup = Popup(title="Select folder", content=chooser, size_hint=(0.9, 0.9))
 
-def main():
-    parser = argparse.ArgumentParser(description=PROJECT["description"])
-    parser.add_argument("--version", action="version", version=f"{PROJECT['name']} {PROJECT['version']}")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+        def on_selection(instance, selection):
+            if selection:
+                popup.dismiss()
+                self.run_scan(selection[0])
 
-    scan_parser = subparsers.add_parser("scan")
-    scan_parser.add_argument("path", help="File or directory to scan")
+        chooser.bind(selection=on_selection)
+        popup.open()
 
-    add_parser = subparsers.add_parser("add")
-    add_parser.add_argument("path", help="Path to malicious sample file")
-    add_parser.add_argument("name", help="Threat name/label")
-
-    args = parser.parse_args()
-    signatures = load_signatures()
-
-    if args.command == "scan":
-        if os.path.isdir(args.path):
-            results = scan_directory(args.path, signatures)
-        elif os.path.isfile(args.path):
-            result = scan_file(args.path, signatures)
-            results = [result] if result else []
-        else:
-            print("Invalid path")
-            sys.exit(1)
+    def run_scan(self, path):
+        self.status_label.text = f"Scanning {path}..."
+        signatures = load_signatures()
+        results = scan_directory(path, signatures)
 
         if results:
-            print(f"Found {len(results)} threat(s):")
-            for r in results:
-                print(f"  [!] {r['path']} -> {r['threat']} ({r['hash']})")
-            sys.exit(1)
+            self.status_label.text = f"Found {len(results)} threat(s)"
+            self.results_label.text = "\n".join(
+                f"[!] {r['path']}\n    {r['threat']} ({r['hash'][:12]}...)"
+                for r in results
+            )
         else:
-            print("No threats found")
+            self.status_label.text = "No threats found"
+            self.results_label.text = ""
 
-    elif args.command == "add":
-        add_signature(args.path, args.name, signatures)
+class MinerApp(App):
+    def build(self):
+        self.title = PROJECT["name"]
+        return MinerRoot()
 
 if __name__ == "__main__":
-    main()
+    MinerApp().run()
