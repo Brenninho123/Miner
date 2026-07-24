@@ -1,99 +1,78 @@
 import os
-import sys
-import json
-import hashlib
-import argparse
+import platform
+import multiprocessing
 
-SIGNATURES_FILE = "signatures.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def load_signatures():
-    if not os.path.exists(SIGNATURES_FILE):
-        return {}
-    with open(SIGNATURES_FILE, "r") as f:
-        return json.load(f)
+def resolve_path(relative_path):
+    return os.path.join(BASE_DIR, relative_path)
 
-def save_signatures(signatures):
-    with open(SIGNATURES_FILE, "w") as f:
-        json.dump(signatures, f, indent=4)
+def detect_signatures_file():
+    candidates = [
+        resolve_path("data/signatures.json"),
+        resolve_path("signatures.json"),
+        os.path.join(os.path.expanduser("~"), ".miner", "signatures.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0]
 
-def hash_file(path, algo="sha256"):
-    hasher = hashlib.new(algo)
-    try:
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                hasher.update(chunk)
-        return hasher.hexdigest()
-    except (PermissionError, FileNotFoundError, OSError):
-        return None
+PROJECT = {
+    "name": "Miner",
+    "package": "com.brenninho.miner",
+    "version": "0.1.0",
+    "description": "An antivirus program written in Python.",
+    "author": "Brenninho123",
+    "license": "Apache-2.0",
 
-def scan_file(path, signatures):
-    file_hash = hash_file(path)
-    if file_hash is None:
-        return None
-    if file_hash in signatures:
-        return {
-            "path": path,
-            "hash": file_hash,
-            "threat": signatures[file_hash]
-        }
-    return None
+    "base_dir": BASE_DIR,
+    "main": "src/main.py",
+    "source_dir": resolve_path("src"),
 
-def scan_directory(root, signatures):
-    results = []
-    for dirpath, _, filenames in os.walk(root):
-        for filename in filenames:
-            full_path = os.path.join(dirpath, filename)
-            result = scan_file(full_path, signatures)
-            if result:
-                results.append(result)
-    return results
+    "python_requires": ">=3.10",
+    "platform": platform.system(),
+    "cpu_count": multiprocessing.cpu_count(),
 
-def add_signature(path, threat_name, signatures):
-    file_hash = hash_file(path)
-    if file_hash is None:
-        print(f"Could not hash file: {path}")
-        return
-    signatures[file_hash] = threat_name
-    save_signatures(signatures)
-    print(f"Added signature for {threat_name}: {file_hash}")
+    "dependencies": [
+        "watchdog>=4.0.0",
+        "requests>=2.31.0",
+        "psutil>=5.9.0"
+    ],
 
-def main():
-    parser = argparse.ArgumentParser(description="Simple hash-based antivirus scanner")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    "dev_dependencies": [
+        "pytest>=8.0.0"
+    ],
 
-    scan_parser = subparsers.add_parser("scan")
-    scan_parser.add_argument("path", help="File or directory to scan")
+    "signatures_file": detect_signatures_file(),
+    "signatures_exists": os.path.exists(detect_signatures_file()),
 
-    add_parser = subparsers.add_parser("add")
-    add_parser.add_argument("path", help="Path to malicious sample file")
-    add_parser.add_argument("name", help="Threat name/label")
+    "scan": {
+        "cpu_threshold": 50.0,
+        "mem_threshold_mb": 500,
+        "hash_algo": "sha256",
+        "chunk_size": 65536,
+        "max_workers": multiprocessing.cpu_count()
+    },
 
-    args = parser.parse_args()
-    signatures = load_signatures()
+    "build": {
+        "entry_point": "src.main:main",
+        "output_dir": resolve_path("dist"),
+        "console_script": "miner-scan"
+    },
 
-    if args.command == "scan":
-        if os.path.isdir(args.path):
-            results = scan_directory(args.path, signatures)
-        elif os.path.isfile(args.path):
-            result = scan_file(args.path, signatures)
-            results = [result] if result else []
-        else:
-            print("Invalid path")
-            sys.exit(1)
+    "assets": [
+        "data/signatures.json",
+        "README.md",
+        "LICENSE"
+    ]
+}
 
-        if results:
-            print(f"Found {len(results)} threat(s):")
-            for r in results:
-                print(f"  [!] {r['path']} -> {r['threat']} ({r['hash']})")
-            sys.exit(1)
-        else:
-            print("No threats found")
-
-    elif args.command == "add":
-        add_signature(args.path, args.name, signatures)
-
-if __name__ == "__main__":
-    main()
+def ensure_signatures_file():
+    path = PROJECT["signatures_file"]
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("{}")
+        PROJECT["signatures_exists"] = True
+    return path
